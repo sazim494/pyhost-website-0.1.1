@@ -1,0 +1,66 @@
+-- Run this SQL inside the MariaDB to create core tables for quick dev
+CREATE TABLE IF NOT EXISTS users (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255),
+  name VARCHAR(200),
+  is_verified TINYINT(1) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS projects (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  owner_id BIGINT NOT NULL,
+  slug VARCHAR(100) NOT NULL,
+  name VARCHAR(200),
+  description TEXT,
+  runtime VARCHAR(50) DEFAULT 'python',
+  region VARCHAR(50),
+  plan_id INT,
+  status VARCHAR(50) DEFAULT 'stopped',
+  start_command VARCHAR(500),
+  entry_file VARCHAR(400),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX (owner_id),
+  FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS server_agents (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  agent_uuid CHAR(36) UNIQUE NOT NULL,
+  name VARCHAR(200),
+  region VARCHAR(50),
+  secret_hash VARCHAR(255),
+  status VARCHAR(50) DEFAULT 'offline',
+  last_heartbeat TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS deployments (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  project_id BIGINT NOT NULL,
+  agent_id BIGINT,
+  status VARCHAR(50) DEFAULT 'pending',
+  commit_sha VARCHAR(255),
+  artifact_path VARCHAR(1024),
+  started_at TIMESTAMP NULL,
+  finished_at TIMESTAMP NULL,
+  logs LONGTEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX (project_id),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS project_files (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  project_id BIGINT NOT NULL,
+  path VARCHAR(1024) NOT NULL,
+  size BIGINT,
+  mime VARCHAR(255),
+  uploaded_by BIGINT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX (project_id),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

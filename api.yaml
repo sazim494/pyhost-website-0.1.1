@@ -1,0 +1,516 @@
+openapi: 3.0.3
+info:
+  title: PyHost Cloud API
+  version: "1.0.0"
+  description: |
+    Public developer API and internal Agent API for PyHost Cloud.
+    Public endpoints use Bearer tokens (user session / API key).
+    Agent endpoints require HMAC signed requests with rotating secrets.
+servers:
+  - url: https://api.pyhost.example.com
+    description: Production
+  - url: https://staging-api.pyhost.example.com
+    description: Staging
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "User/API token for developer API (server-issued)."
+    AgentHMAC:
+      type: apiKey
+      in: header
+      name: X-Agent-ID
+      description: >
+        Agent authentication requires these headers:
+        - X-Agent-ID: agent UUID
+        - X-Timestamp: unix epoch seconds
+        - X-Request-ID: client-generated UUID for idempotency/tracing
+        - X-Signature: HMAC_SHA256(secret, METHOD|PATH|X-Timestamp|BODY_SHA256)
+        Provide the secret per-agent; rotate regularly.
+  schemas:
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+        code:
+          type: string
+        details:
+          type: object
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+        name:
+          type: string
+        is_verified:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    Project:
+      type: object
+      properties:
+        id:
+          type: integer
+        owner_id:
+          type: integer
+        slug:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        runtime:
+          type: string
+          enum: [python,node,php]
+        region:
+          type: string
+        plan_id:
+          type: integer
+        status:
+          type: string
+          enum: [stopped,starting,running,deploying,failed]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    EnvVar:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+        is_secret:
+          type: boolean
+    Deployment:
+      type: object
+      properties:
+        id:
+          type: integer
+        project_id:
+          type: integer
+        agent_id:
+          type: integer
+        status:
+          type: string
+          enum: [pending,deploying,success,failed]
+        commit_sha:
+          type: string
+        artifact_path:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        logs:
+          type: string
+    FileMeta:
+      type: object
+      properties:
+        id:
+          type: integer
+        project_id:
+          type: integer
+        path:
+          type: string
+        size:
+          type: integer
+        mime:
+          type: string
+        uploaded_by:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+    AgentHeartbeat:
+      type: object
+      properties:
+        agent_uuid:
+          type: string
+        region:
+          type: string
+        capacity:
+          type: object
+          properties:
+            cpu_cores: { type: integer }
+            memory_mb: { type: integer }
+            disk_mb: { type: integer }
+        running_projects:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+
+paths:
+  /api/v1/projects:
+    get:
+      summary: List projects for the authenticated user
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Projects list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+        default:
+          description: error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: Create a project
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, runtime, region]
+              properties:
+                name: { type: string }
+                slug: { type: string }
+                description: { type: string }
+                runtime:
+                  type: string
+                  enum: [python,node,php]
+                region: { type: string }
+                plan_id: { type: integer }
+                auto_restart: { type: boolean, default: true }
+                start_command: { type: string }
+                entry_file: { type: string }
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          description: validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/projects/{projectId}:
+    parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      summary: Get a project
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '404':
+          description: not found
+    patch:
+      summary: Update project settings (name, plan, start command, etc.)
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                region: { type: string }
+                plan_id: { type: integer }
+                start_command: { type: string }
+      responses:
+        '200':
+          description: updated project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+
+  /api/v1/projects/{projectId}/env:
+    get:
+      summary: List env vars (non-secret values will be shown; secrets masked)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: env list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EnvVar'
+    post:
+      summary: Create/Update env vars
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties:
+                $ref: '#/components/schemas/EnvVar'
+      responses:
+        '200':
+          description: OK
+
+  /api/v1/projects/{projectId}/deploy:
+    post:
+      summary: Request deployment (creates Deployment record and enqueues)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source_type:
+                  type: string
+                  enum: [zip, file_manager, git, template]
+                source:
+                  type: object
+      responses:
+        '202':
+          description: Deployment accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deployment'
+        '400':
+          $ref: '#/components/schemas/Error'
+
+  /api/v1/projects/{projectId}/start:
+    post:
+      summary: Start the project's runtime
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: Start requested
+        '400':
+          description: error
+
+  /api/v1/projects/{projectId}/stop:
+    post:
+      summary: Stop the project's runtime
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: Stop requested
+
+  /api/v1/projects/{projectId}/restart:
+    post:
+      summary: Restart the project's runtime
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: Restart requested
+
+  /api/v1/projects/{projectId}/files:
+    get:
+      summary: List files for a project (metadata)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: files
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileMeta'
+    post:
+      summary: Upload a file (multipart)
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                path:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: file uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileMeta'
+
+  /api/v1/projects/{projectId}/logs:
+    get:
+      summary: Get logs (historical); use WebSocket/SSE for live streaming
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [runtime,deployment,system,error]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Log lines
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    timestamp:
+                      type: string
+                      format: date-time
+                    level:
+                      type: string
+                    message:
+                      type: string
+
+  /agent/v1/heartbeat:
+    post:
+      summary: Agent heartbeat (agent → control plane)
+      description: >
+        Agent must send heartbeat regularly. Must include headers:
+        X-Agent-ID, X-Timestamp, X-Request-ID, X-Signature (HMAC).
+      security:
+        - AgentHMAC: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentHeartbeat'
+      responses:
+        '200':
+          description: OK
+
+  /agent/v1/projects/{projectId}/deploy:
+    post:
+      summary: Control plane triggers deploy on agent (control → agent)
+      description: >
+        Control plane calls agent with deploy instruction. Agent must validate signature and project ownership.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      security:
+        - AgentHMAC: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deployment_id: { type: integer }
+                artifact_url: { type: string }
+                start_command: { type: string }
+                env:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/EnvVar'
+      responses:
+        '200':
+          description: Agent accepted deploy
+        '400':
+          $ref: '#/components/schemas/Error'
+
+  /agent/v1/projects/{projectId}/start:
+    post:
+      summary: Start a project process (control → agent)
+      security:
+        - AgentHMAC: []
+      responses:
+        '200':
+          description: accepted
+
+  /agent/v1/projects/{projectId}/stop:
+    post:
+      summary: Stop a project process (control → agent)
+      security:
+        - AgentHMAC: []
+      responses:
+        '200':
+          description: accepted
+
+  /agent/v1/projects/{projectId}/status:
+    get:
+      summary: Agent → control plane / control plane → agent project runtime status endpoint
+      security:
+        - AgentHMAC: []
+      responses:
+        '200':
+          description: status payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  pid: { type: integer }
+                  uptime_seconds: { type: number }
+                  memory_mb: { type: number }
+                  cpu_percent: { type: number }
+
+security:
+  - bearerAuth: []  # default for interactive clients; agent endpoints explicitly require AgentHMAC
+
+tags:
+  - name: Projects
+    description: Developer-facing project management
+  - name: Files
+    description: File manager endpoints
+  - name: Logs
+    description: Logs & streaming
+  - name: Agent
+    description: Internal agent API (HMAC auth)

@@ -1,0 +1,61 @@
+version: "3.8"
+services:
+  db:
+    image: mariadb:10.6
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: pyhost
+      MYSQL_USER: pyhost
+      MYSQL_PASSWORD: pyhostpass
+    volumes:
+      - db_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  backend:
+    build: ./backend
+    volumes:
+      - ./backend:/app
+    environment:
+      - APP_ENV=local
+      - DB_HOST=db
+      - DB_DATABASE=pyhost
+      - DB_USERNAME=pyhost
+      - DB_PASSWORD=pyhostpass
+      - REDIS_HOST=redis
+    depends_on:
+      - db
+      - redis
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    volumes:
+      - ./frontend:/usr/src/app
+      - /usr/src/app/node_modules
+    environment:
+      - VITE_API_BASE=http://localhost:8000/api/v1
+    ports:
+      - "5173:5173"
+    command: ["npm", "run", "dev"]
+
+  agent:
+    build: ./agent
+    volumes:
+      - ./agent:/agent
+    environment:
+      - AGENT_UUID=agent-local-001
+      - AGENT_SECRET=super-secret-example
+    ports:
+      - "9000:9000"
+    depends_on:
+      - backend
+
+volumes:
+  db_data:
